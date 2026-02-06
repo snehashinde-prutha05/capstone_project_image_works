@@ -1,6 +1,6 @@
 print("🔥 THIS app.py FILE IS RUNNING 🔥")
 
-from flask import Flask, request, jsonify, send_from_directory , render_template
+from flask import Flask, request, jsonify, send_from_directory , render_template, send_file
 from flask_cors import CORS
 import os
 from werkzeug.utils import secure_filename
@@ -11,16 +11,26 @@ from datetime import datetime
 import json
 import base64
 import google.generativeai as genai
-from models import db, History
+from models import db, History ,User
 import traceback
+
 from sqlalchemy import text
+from auth import hash_password, verify_password, create_token, get_current_user
+
 
 
 
 
 load_dotenv()
+# 1. Get the path to the 'backend' folder
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
-app = Flask(__name__)
+# 2. Go up one level to 'ImageWorks-Master' and then into 'frontend'
+FRONTEND_DIR = os.path.abspath(os.path.join(BACKEND_DIR, '..', 'frontend'))
+
+app = Flask(__name__, 
+            static_folder=os.path.join(FRONTEND_DIR, 'static'), 
+            static_url_path='/static')
 
 # CORS(app)  # allow frontend JS calls
 CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -29,6 +39,7 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 
 # ---------------- CONFIG ----------------
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 GENERATED_DIR = os.path.join(BASE_DIR, "generated")
@@ -54,12 +65,12 @@ print(f"[INFO] Generated dir: {GENERATED_DIR}")
 print(f"[INFO] API Key exists: {bool(NANOBANANA_KEY)}")
 
 # ---------------- ROOT ----------------
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({
-        "success": True,
-        "message": "Server is running"
-    })
+# @app.route("/", methods=["GET"])
+# def index():
+#     return jsonify({
+#         "success": True,
+#         "message": "Server is running"
+#     })
 
 #============================================================================
 # ---------------- DATABASE CONFIG ----------------
@@ -74,6 +85,134 @@ with app.app_context():
     print(f"--- SUCCESS: Total records found in ROOT database: {count} ---")
 # DATABASE CONFIGURATION
 # =============================================================================
+
+
+@app.route('/test-db')
+def test_db():
+#     """
+#     Test route to verify database is working.
+#     Creates a test user and todo if they don't exist.
+#     """
+#     # Check if test user exists
+      user = User.query.filter_by(username='testuser').first()
+      print(user)
+ 
+      if not user:
+#          # Create test user
+          user = User(
+             username='testuser',
+             email='test@example.com',
+             password_hash='temporary'
+         )
+          db.session.add(user)
+          db.session.commit()
+          all_users = User.query.all()
+   
+          return render_template('test_db.html', users=all_users)
+      
+
+# @app.route('/')
+# def index():
+#     html_path = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'index.html')
+#     return send_file(html_path)
+
+# Route for the Main Dashboard (index.html)
+# @app.route('/dashboard')
+# def dashboard():
+#     # This looks for index.html inside the "frontend" folder, one level up from "backend"
+#     frontend_dir = os.path.join(os.path.dirname(BASE_DIR), 'frontend')
+#     return send_from_directory(frontend_dir, 'index.html')
+
+# Route to serve all other tool pages (tool-prompt-to-image.html, etc.)
+
+
+
+# 1. The Public Landing Page (Home)
+@app.route('/')
+def home():
+    return send_from_directory(FRONTEND_DIR, 'home.html')
+
+# 2. The Private Dashboard
+@app.route('/dashboard')
+def dashboard():
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+# 3. Handle Login/Register specifically (if they are in templates folder)
+@app.route('/login')
+def login_page():
+    return send_from_directory(os.path.join(FRONTEND_DIR, 'templates'), 'login.html')
+
+@app.route('/register')
+def register_page():
+    return send_from_directory(os.path.join(FRONTEND_DIR, 'templates'), 'register.html')
+
+# Catch-all route for tools (like tool-prompt-to-image.html)
+@app.route('/<path:filename>')
+def serve_frontend(filename):
+    # Try serving from 'frontend/templates' first (for login/register)
+    template_path = os.path.join(FRONTEND_DIR, 'templates')
+    if os.path.exists(os.path.join(template_path, filename)):
+        return send_from_directory(template_path, filename)
+    
+    # Otherwise serve from 'frontend' root
+    return send_from_directory(FRONTEND_DIR, filename)
+# =============================================================================
+# AUTH API ROUTES
+# =============================================================================
+
+@app.route('/api/register', methods=['POST'])
+def api_register():
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    username = data.get('username')
+    email = data.get('email')
+    password = data.get('password')
+
+    if not username or not email or not password:
+        return jsonify({'error': 'All fields required'}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({'error': 'Email already registered'}), 400
+
+    new_user = User(
+        username=username,
+        email=email,
+        password_hash=hash_password(password)
+    )
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({'message': 'Registration successful!'}), 201
+
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    email = data.get('email')
+    password = data.get('password')
+
+    user = User.query.filter_by(email=email).first()
+    if not user or not verify_password(user.password_hash, password):
+        return jsonify({'error': 'Invalid credentials'}), 401
+
+    token = create_token(user.id, user.is_admin)
+
+    return jsonify({
+        'token': token,
+        'user': {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'is_admin': user.is_admin
+        }
+    }), 200
+
+
 
 
 
@@ -164,12 +303,52 @@ def generate_nano_banana_image(prompt, style):
         return None
 
 
+#----------------------Prompt to image history--------------------------------------
+@app.route("/api/get-history", methods=["GET"])
+def get_history():
+
+    current_user, error = get_current_user()
+    if error:
+        return error
+
+
+    target_tool = request.args.get("tool")
+    if not target_tool:
+        return jsonify({"success": False, "error": "tool required"}), 400
+    
+    
+
+    records = (
+        History.query
+        .filter(History.tool_name == target_tool, History.user_id == current_user.id)
+        .order_by(History.created_at.desc())
+        .limit(5)
+        .all()
+    )
+
+    return jsonify({
+        "success": True,
+        "history": [{
+            "id": r.id,
+            "input": r.input_text,         # Keeps old tools working
+            "image": r.output_image,       # Keeps old tools working
+            "raw_input_img": r.input_image, # New: for Specs/Hair logic
+            "date": r.created_at.strftime("%Y-%m-%d %H:%M")
+        } for r in records]
+    }),200
 # ---------------- PROMPT TO IMAGE ----------------
 
 
 
 @app.route("/api/prompt-to-image", methods=["POST"])
 def prompt_to_image():
+
+    current_user, error = get_current_user()
+    print("hello current user")
+    if error:
+        return error
+    print("error -------------------")
+    
     try:
         # 1. RECEIVE
         data = request.json
@@ -198,7 +377,9 @@ def prompt_to_image():
             tool_name="prompt-to-image",
             input_text=f"[Aspect Ratio: {user_aspect}] |  Prompt: {user_prompt}",
             output_text=final_prompt,
-            output_image=generated_url
+            output_image=generated_url,
+            
+            user_id=current_user.id  # User ID from token (secure!)
         )
         db.session.add(new_entry)
         db.session.commit()
@@ -213,50 +394,31 @@ def prompt_to_image():
             "success": True,
             "image_url": generated_url
             
-        })
+        }), 201
 
     except Exception as e:
         db.session.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
     
-#----------------------Prompt to image history--------------------------------------
-@app.route("/api/get-history", methods=["GET"])
-def get_history():
-    target_tool = request.args.get("tool")
-    if not target_tool:
-        return jsonify({"success": False, "error": "tool required"}), 400
-
-    records = (
-        History.query
-        .filter(History.tool_name == target_tool)
-        .order_by(History.created_at.desc())
-        .limit(6)
-        .all()
-    )
-
-    return jsonify({
-        "success": True,
-        "history": [{
-            "id": r.id,
-            "input": r.input_text,         # Keeps old tools working
-            "image": r.output_image,       # Keeps old tools working
-            "raw_input_img": r.input_image, # New: for Specs/Hair logic
-            "date": r.created_at.strftime("%Y-%m-%d %H:%M")
-        } for r in records]
-    })
 
         
 #-------------------------------delete history--------------------------------------------------------------
 # 3. DELETE RECORD
 @app.route("/api/delete-history/<int:record_id>", methods=["DELETE"])
 def delete_history(record_id):
+    # Step 1: Check if user is logged in
+    current_user, error = get_current_user()
+    if error:
+        return error
     try:
         record = History.query.get(record_id)
         if record:
             db.session.delete(record)
             db.session.commit()
             return jsonify({"success": True}), 200 # Explicit status code
+        
         return jsonify({"success": False, "error": "Record not found"}), 404
+    
     except Exception as e:
         db.session.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
@@ -271,6 +433,11 @@ def delete_history(record_id):
 # ---------------- IMAGE TO STYLE ----------------
 @app.route("/api/image-style", methods=["POST"])
 def api_image_style():
+
+    current_user, error = get_current_user()
+    if error:
+        return error
+    
     try:
         # 1. Mandatory File Check
         if "image" not in request.files:
@@ -297,10 +464,14 @@ def api_image_style():
             tool_name="image-to-style",
             input_text=f"[Aspect ratio : {aspect}] | Style: {style}  | Prompt : (File: {filename})",
             output_text=instruction if instruction else f"Stylized as {style}",
-            output_image=generated_url
+            output_image=generated_url,
+            user_id=current_user.id  # User ID from token (secure!)
+
         )
         db.session.add(new_entry)
         db.session.commit()
+
+        
 
         return jsonify({
             "success": True,
@@ -316,6 +487,10 @@ def api_image_style():
 
 @app.route("/api/specs-tryon", methods=["POST"])
 def specs_tryon():
+
+    current_user, error = get_current_user()
+    if error:
+        return error
     try:
         # 1. Validation
         if "face" not in request.files or "specs" not in request.files:
@@ -364,7 +539,9 @@ def specs_tryon():
             input_text=user_instruction if user_instruction else "natural fit", 
             input_image=input_history_data, 
             output_image=output_url,
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
+            user_id=current_user.id  # User ID from token (secure!)
+
         )
         
         db.session.add(new_entry)
@@ -385,6 +562,10 @@ def specs_tryon():
 # =========================================================
 @app.route("/api/haircut-preview", methods=["POST"])
 def haircut_preview():
+
+    current_user, error = get_current_user()
+    if error:
+        return error
     try:
         # 1. Validation - matching HTML names 'you' and 'sample'
         if "you" not in request.files or "sample" not in request.files:
@@ -429,7 +610,9 @@ def haircut_preview():
             input_text=user_instruction_prompt if user_instruction_prompt  else "seamless blend with natural lighting", # Store the full engineered prompt here
             input_image=input_history_data,
             output_image=output_url,
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
+            user_id=current_user.id  # User ID from token (secure!)
+
         )
 
         
@@ -449,6 +632,11 @@ GENERATED_FOLDER = os.path.join(os.getcwd(), "generated")
 
 @app.route("/api/insta-story", methods=["POST", "OPTIONS"])
 def api_insta_story():
+
+    current_user, error = get_current_user()
+    if error:
+        return error
+    
     if request.method == "OPTIONS":
         return jsonify({"success": True}), 200
 
@@ -476,7 +664,9 @@ def api_insta_story():
                 input_text=f"Prompt : {user_text}",
                 input_image="Text Input",
                 output_image=output_url,
-                created_at=datetime.utcnow()
+                created_at=datetime.utcnow(),
+                user_id=current_user.id  # User ID from token (secure!)
+
             )
             db.session.add(new_entry)
             db.session.commit()
@@ -495,10 +685,14 @@ def api_insta_story():
         return jsonify({"success": False, "error": str(e)}), 500
     
 #-------------------------------------Social media post generator------------------------------------------
-TEST_IMAGE = "test.jpg"  # Backend placeholder image
 
 @app.route("/api/social/generate", methods=["POST", "OPTIONS"])
 def generate_social_post():
+
+    current_user, error = get_current_user()
+    if error:
+        return error
+    
     if request.method == "OPTIONS":
         return jsonify({"success": True}), 200
     
@@ -525,7 +719,9 @@ def generate_social_post():
                 input_text=f"Platform: {platform} | Prompt: {prompt if prompt else 'Aesthetic visual'}",
                 input_image="Text Input",
                 output_image=output_url,
-                created_at=datetime.utcnow()
+                created_at=datetime.utcnow(),
+                user_id=current_user.id  # User ID from token (secure!)
+
             )
             db.session.add(new_entry)
             db.session.commit()
